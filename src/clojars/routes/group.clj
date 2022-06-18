@@ -4,7 +4,8 @@
    [clojars.db :as db]
    [clojars.web.group :as view]
    [compojure.core :as compojure :refer [GET POST DELETE]]
-   [clojars.log :as log]))
+   [clojars.log :as log]
+   [clojars.event :as event]))
 
 (defn- get-members [db groupname]
   (let [actives (seq (db/group-actives db groupname))]
@@ -44,6 +45,10 @@
                           (db/find-user db username)
                           (do
                             (db/add-admin db groupname username account)
+                            (event/emit :group-member-added {:username account
+                                                             :group groupname
+                                                             :member username
+                                                             :admin? admin?})
                             (log/info {:status :success})
                             (log/audit db {:tag :member-added
                                            :message (format "user '%s' added" username)})
@@ -94,6 +99,9 @@
                (some #{username} (map :user actives))
                (do
                  (db/inactivate-member db groupname username account)
+                 (event/emit :group-member-removed {:username account
+                                                    :group groupname
+                                                    :member username})
                  (log/info {:status :success})
                  (log/audit db {:tag :member-removed
                                 :message (format "user '%s' removed" username)})
