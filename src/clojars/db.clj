@@ -23,6 +23,8 @@
     SecureRandom)
    (java.sql
     Timestamp)
+   (java.time
+    Instant)
    (java.util
     UUID)))
 
@@ -600,6 +602,15 @@
                 :from     :jars
                 :order-by :id}))))
 
+(defn version-feed
+  [db ^Instant from-inst limit]
+  (q db {:select   [:group_name :jar_name :version :created]
+         :from     :jars
+         ;; NOCOMMIT: (toby) what is the precision of this timestamp?
+         ;; Does this need an index?
+         :where    [:> :created (Timestamp/from from-inst)]
+         :order-by :created
+         :limit    limit}))
 
 (defn all-groups [db]
   (q db {:select-distinct [:group_name]

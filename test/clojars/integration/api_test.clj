@@ -2,21 +2,32 @@
   (:require
    [cheshire.core :as json]
    [clj-http.client :as client]
+   [clojars.db :as db]
    [clojars.integration.steps :refer [register-as inject-artifacts-into-repo!]]
    [clojars.test-helper :as help]
    [clojure.string :as str]
    [clojure.test :refer [deftest is testing use-fixtures]]
-   [kerodon.core :refer [session]]))
+   [kerodon.core :refer [session]])
+  (:import
+   (java.sql
+    Timestamp)
+   (java.time
+    Instant)))
 
 (use-fixtures :each
   help/default-fixture
   help/with-clean-database
   help/run-test-app)
 
+(defn get-api*
+  ([url-fragment]
+   (get-api* url-fragment nil))
+  ([url-fragment opts]
+   (-> (str "http://localhost:" help/test-port url-fragment)
+       (client/get opts))))
+
 (defn get-api [parts & [opts]]
-  (-> (str "http://localhost:" help/test-port "/api/"
-           (str/join "/" (map name parts)))
-      (client/get opts)))
+  (get-api* (str "/api/" (str/join "/" (map name parts))) opts))
 
 (defn assert-404 [& get-args]
   (try
@@ -107,3 +118,34 @@
 
   (testing "get non-existent user"
     (assert-404 [:users "danethemane"])))
+
+(deftest test-release-feed-with-invalid-date
+  (let [res (get-api* "/api/release-feed?from=1" {:throw-exceptions? false})
+        body (json/parse-string (:body res) true)]
+    (is (= 400 (:status res)))
+    (is (= {:invalid-date "1"} body))))
+
+(deftest test-release-feed
+  (let [start-time (System/currentTimeMillis)
+        start-inst (Instant/ofEpochMilli start-time)
+        curr-time (atom start-time)
+        db (get-in help/system [:db :spec])]
+    (with-redefs [db/get-time (fn []
+                                (Timestamp. (swap! curr-time inc)))]
+      (-> (session (help/app))
+          (register-as "dantheman" "test@example.org" "password"))
+      (inject-artifacts-into-repo! db "dantheman" "test.jar" "test-0.0.1/test.pom")
+      (inject-artifacts-into-repo! db "dantheman" "test.jar" "test-0.0.2/test.pom")
+      (inject-artifacts-into-repo! db "dantheman" "test.jar" "test-0.0.3-SNAPSHOT/test.pom")
+      (inject-artifacts-into-repo! db "dantheman" "test.jar" "test-0.0.3-SNAPSHOT/test.pom"))
+
+    (doseq [f ["application/json" "application/edn" "application/x-yaml" "application/transit+json"]]
+      (testing f
+        (let [res (get-api* (format "/api/release-feed?from=%s" start-inst)
+                            {:accept f})]
+          (is (= f (help/get-content-type res)))
+          (is (= 200 (:status res))))))
+
+    (let [res (get-api* (format "/api/release-feed?from=%s" (Instant/ofEpochMilli start-time)))
+          body (json/parse-string (:body res) true)]
+      (is (= {} body)))))
